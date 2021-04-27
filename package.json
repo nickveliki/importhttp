@@ -1,0 +1,11 @@
+{
+  "name": "importhttp",
+  "version": "1.0.0",
+  "description": "scope out nickveliki/importhttp-server hosted files and import them into your project",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "nickveliki",
+  "license": "MIT"
+}
