@@ -1,27 +1,64 @@
+const path = require("path");
+const fs = require("fs");
 const http = require("http")
+const modules = fs.readdirSync("./node_modules").map((dir)=>({dir, main: JSON.parse(fs.readFileSync(path.resolve("node_modules",dir, "package.json")).toString()).main}));
+const url = require("url");
+const crypto = require("crypto");
+const init = (source)=>new Promise((res, rej)=>{
+    const ecdh = crypto.createECDH("secp521r1");
+    const req = http.request(`${source}/init`, {method:"POST"}, (result)=>{
+        const data = []
+        result.on("data", (d)=>{
+            data.push(...d);
+        })
+        result.on("end", ()=>{
+            const bobpub = Buffer.from(data);
+            const material = ecdh.computeSecret(bobpub);
+            crypto.pbkdf2(material, source, 100000, 32, "sha256", (err, key)=>{
+                if(err){
+                    rej(err)
+                }else{
+                    res({key, bobpub})
+                }
+            })
+        })
+    });
+    req.write(ecdh.generateKeys());
+    req.end();
+})
 const sources = []
-const addSource = (src)=>{
+const addSource = (src)=>new Promise((res, rej)=>{
     if(!sources.map((source)=>source.src).includes(src)){
-        //console.log("sources doesn't contain source")
-        sources.push({src, files:[]})
-        return sources[sources.length-1]
+        init(src).then(({key, bobpub})=>{
+            sources.push({src, files:[], key, bobpub})
+            res(sources[sources.length-1])
+        }, (err)=>{
+            rej(err)
+        })
     }else{
-        return sources.find((source)=>source.src==src);
+        res(sources.find((source)=>source.src==src));
     }
-}
-const addFile = (url)=>{
+})
+const addFile = (url)=>new Promise((res, rej)=>{
     const source = urlContainsSource(url);
     if(source){
-        const {files} = addSource(source[0])
-        if(!files.includes(url.replace(source[0], ""))){
-            files.push(url.replace(source[0], ""))
+        addSource(source[0]).then(({files, key, bobpub})=>{
+            if(!files.includes(url.replace(source[0], ""))){
+                files.push(url.replace(source[0], ""))
+            }
+            res({requesturl: url, key, bobpub})    
+        }, rej)
+    }else{
+        const source = resolveSource(url);
+        if(source){
+            res({requesturl: source.src+url, key: source.key, bobpub: source.bobpub})
+        }else{
+            rej("couldn't resolve source to "+url)
         }
-        return url
     }
-    return resolveSource(url)+url;
-}
+})
 const resolveSource = (file)=>{
-    return sources.find(({files})=>files.includes(file)).src
+    return sources.find(({files})=>files.includes(file))
 }
 const urlContainsSource = (url)=>{
     return typeof(url)=="string"?url.match(/^http:\/\/[\w_-]*(:\d*)?\//):undefined
@@ -35,36 +72,79 @@ const sourceContent = (src)=>new Promise((resolve, rej)=>{
             })
             res.on("end", ()=>{
                 const files = JSON.parse(Buffer.from(data).toString())
-                files.forEach((file)=>{
-                    addFile(src+file)
-                })
-                //console.log(sources)
-                resolve()
+                addFile(src+files.shift()).then(()=>{
+                    files.forEach((file)=>{
+                        addFile(src+file)
+                    })
+                    resolve()
+                })                
             })
         }else{
             rej(err)
         }
     })
 })
-const importhttp = (url)=>new Promise((resolve, rej)=>{
-    const requesturl = addFile(url)
-    if(requesturl){
-        http.get(requesturl, (res)=>{
+const importhttp = (url, authorization="vtoken noauth")=>new Promise((resolve, rej)=>{
+    addFile(url).then((reqinfo)=>{
+        http.request(reqinfo.requesturl, {method:"GET", headers:{authorization, bobpub:reqinfo.bobpub.toString("base64")}}, (res)=>{
             if(res.statusCode<400){
-                const data = [];
+                    const decrypt = crypto.createDecipheriv("aes-256-gcm", reqinfo.key, Buffer.from(res.headers.iv, "base64"))
+                    const data = []
                     res.on("data", (d)=>{
-                        data.push(...d)
+                        data.push(...d);
                     })
                     res.on("end", ()=>{
-                        import("data:text/javascript,"+Buffer.from(data)).then(resolve, rej)
+                        import("data:text/javascript,"+resolveImports(decrypt.update(Buffer.from(data)).toString())).then(resolve, rej)
                     })
-            }else{
-                rej(res.statusCode)
-            }
-        })
-    }else{
-        rej("can't resolve filename to source")
-    }
-    
+                }else{
+                    if(res.statusCode==555){
+                        const src = urlContainsSource(reqinfo.requesturl)[0];
+                        init(src).then(({key, bobpub})=>{
+                            const source = sources.find((source)=>source.src==src);
+                            source.key = key;
+                            source.bobpub = bobpub;
+                            importhttp(url, authorization).then(resolve, rej)
+                        })
+                    }else{
+                        rej(res.statusCode)
+                    }
+                }
+            }).end()           
+    }, rej)    
 })
+const resolveImports = (script)=>{
+    const statements = script.split(";").map((statement, index)=>({
+        statement, index
+    }))
+
+    const imports = statements.filter(({statement})=>statement.includes("import("))
+    imports.forEach((imp)=>{
+        const target = imp.statement.match(/import\(".*"\)\.then/)
+
+        if(target){
+            const module = target[0].replace("import(\"", "").replace("\").then").replace(/undefined/g, "");
+            const mtarg = modules.find(({dir})=>dir==module);
+
+            if(mtarg){
+                const statement = statements.find(({index})=>index==imp.index)
+                if(statement){
+                statement.statement = statement.statement.replace(module, url.pathToFileURL(path.resolve(path.join("./", "node_modules", module, mtarg.main))))
+                }
+            }
+        }
+    })
+    const directimports = statements.filter(({statement})=>statement.includes("import")&&statement.includes("from"))
+    directimports.forEach((imp)=>{
+        const [imported, target] = imp.statement.split("from");
+        const mtarg = modules.find(({dir})=>dir==target.replace(/"/g, "").trim())
+        if(mtarg){
+            const statement = statements.find(({index})=>index==imp.index);
+            if(statement){
+                statement.statement = `${imported} from "${url.pathToFileURL(path.resolve("./", "node_modules", target.replace(/"/g, "").trim(), mtarg.main))}"`
+
+            }
+        }
+    }) 
+    return statements.map(({statement})=>statement).join(";")
+}
 module.exports = {importhttp, sourceContent};
