@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const http = require("http")
-const modules = fs.readdirSync("./node_modules").map((dir)=>({dir, main: JSON.parse(fs.readFileSync(path.resolve("node_modules",dir, "package.json")).toString()).main}));
+const modules = fs.readdirSync("./node_modules").filter((dir)=>fs.statSync(path.join("./node_modules",dir)).isDirectory()&&fs.existsSync(path.join("./node_modules", dir, "package.json"))).map((dir)=>({dir, main: JSON.parse(fs.readFileSync(path.resolve("node_modules",dir, "package.json")).toString()).main}));
 const url = require("url");
 const crypto = require("crypto");
 const init = (source)=>new Promise((res, rej)=>{
@@ -14,7 +14,7 @@ const init = (source)=>new Promise((res, rej)=>{
         result.on("end", ()=>{
             const bobpub = Buffer.from(data);
             const material = ecdh.computeSecret(bobpub);
-            crypto.pbkdf2(material, source, 100000, 32, "sha256", (err, key)=>{
+            crypto.pbkdf2(material, Buffer.from(result.headers.salt, "base64"), 100000, 32, "sha256", (err, key)=>{
                 if(err){
                     rej(err)
                 }else{
