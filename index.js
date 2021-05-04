@@ -72,9 +72,12 @@ const sourceContent = (src)=>new Promise((resolve, rej)=>{
             })
             res.on("end", ()=>{
                 const files = JSON.parse(Buffer.from(data).toString())
-                addFile(src+files.shift()).then(()=>{
+                addFile(src+files.shift()).then(({requesturl})=>{
+                    //console.log(requesturl)
                     files.forEach((file)=>{
-                        addFile(src+file)
+                        addFile(src+file).then(({requesturl})=>{
+                            //console.log(requesturl)
+                        })
                     })
                     resolve()
                 })                
@@ -94,7 +97,7 @@ const importhttp = (url, authorization="vtoken noauth")=>new Promise((resolve, r
                         data.push(...d);
                     })
                     res.on("end", ()=>{
-                        import("data:text/javascript,"+resolveImports(decrypt.update(Buffer.from(data)).toString())).then(resolve, rej)
+                        import("data:text/javascript;charset=utf-8;base64,"+Buffer.from(resolveImports(decrypt.update(Buffer.from(data)).toString())).toString("base64")).then(resolve, rej)
                     })
                 }else{
                     if(res.statusCode==555){
