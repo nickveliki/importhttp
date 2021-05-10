@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const http = require("http")
-const modules = fs.readdirSync("./node_modules").filter((dir)=>fs.statSync(path.join("./node_modules",dir)).isDirectory()&&fs.existsSync(path.join("./node_modules", dir, "package.json"))).map((dir)=>({dir, main: JSON.parse(fs.readFileSync(path.resolve("node_modules",dir, "package.json")).toString()).main}));
+const modules = fs.readdirSync("./node_modules").filter((dir)=>fs.statSync(path.join("./node_modules",dir)).isDirectory()&&fs.existsSync(path.join("./node_modules", dir, "package.json"))).map((dir)=>({dir, main: JSON.parse(fs.readFileSync(path.resolve("node_modules",dir, "package.json")).toString()).main})).map((item)=>({dir: item.dir, main: item.main?item.main.match(/.\.[cm]?js/)?item.main:fs.readdirSync(path.join("./node_modules", item.dir)).find((str)=>str.match(new RegExp(item.main))):undefined}));
 const url = require("url");
 const crypto = require("crypto");
 const init = (source)=>new Promise((res, rej)=>{
@@ -43,14 +43,16 @@ const addFile = (url)=>new Promise((res, rej)=>{
     const source = urlContainsSource(url);
     if(source){
         addSource(source[0]).then(({files, key, bobpub})=>{
-            if(!files.includes(url.replace(source[0], ""))){
-                files.push(url.replace(source[0], ""))
+            if(!files.map(({fileName})=>fileName).includes(url.replace(source[0], ""))){
+                files.push({fileName:url.replace(source[0], "")})
             }
             res({requesturl: url, key, bobpub})    
         }, rej)
     }else{
-        const source = resolveSource(url);
-        if(source){
+        const {source, module} = resolveSource(url);
+        if(module){
+            res({module})
+        }else if(source){
             res({requesturl: source.src+url, key: source.key, bobpub: source.bobpub})
         }else{
             rej("couldn't resolve source to "+url)
@@ -58,7 +60,10 @@ const addFile = (url)=>new Promise((res, rej)=>{
     }
 })
 const resolveSource = (file)=>{
-    return sources.find(({files})=>files.includes(file))
+    const source = sources.find(({files})=>files.map(({fileName})=>fileName).includes(file))
+    const namedFile = source?source.files.find(({fileName})=>fileName==file):undefined;
+    const module = namedFile?namedFile.module:undefined;
+    return {source, module};
 }
 const urlContainsSource = (url)=>{
     return typeof(url)=="string"?url.match(/^http:\/\/[\w_-]*(:\d*)?\//):undefined
@@ -89,30 +94,42 @@ const sourceContent = (src)=>new Promise((resolve, rej)=>{
 })
 const importhttp = (url, authorization="vtoken noauth")=>new Promise((resolve, rej)=>{
     addFile(url).then((reqinfo)=>{
-        http.request(reqinfo.requesturl, {method:"GET", headers:{authorization, bobpub:reqinfo.bobpub.toString("base64")}}, (res)=>{
-            if(res.statusCode<400){
-                    const decrypt = crypto.createDecipheriv("aes-256-gcm", reqinfo.key, Buffer.from(res.headers.iv, "base64"))
-                    const data = []
-                    res.on("data", (d)=>{
-                        data.push(...d);
-                    })
-                    res.on("end", ()=>{
-                        import("data:text/javascript;charset=utf-8;base64,"+Buffer.from(resolveImports(decrypt.update(Buffer.from(data)).toString())).toString("base64")).then(resolve, rej)
-                    })
-                }else{
-                    if(res.statusCode==555){
-                        const src = urlContainsSource(reqinfo.requesturl)[0];
-                        init(src).then(({key, bobpub})=>{
-                            const source = sources.find((source)=>source.src==src);
-                            source.key = key;
-                            source.bobpub = bobpub;
-                            importhttp(url, authorization).then(resolve, rej)
+        if(reqinfo.module){
+            console.log("from requinfo", reqinfo.module)
+            resolve(reqinfo.module);
+        }else{
+            http.request(reqinfo.requesturl, {method:"GET", headers:{authorization, bobpub:reqinfo.bobpub.toString("base64")}}, (res)=>{
+                if(res.statusCode<400){
+                        const decrypt = crypto.createDecipheriv("aes-256-gcm", reqinfo.key, Buffer.from(res.headers.iv, "base64"))
+                        const data = []
+                        res.on("data", (d)=>{
+                            data.push(...d);
+                        })
+                        res.on("end", ()=>{
+                            import("data:text/javascript;charset=utf-8;base64,"+Buffer.from(resolveImports(decrypt.update(Buffer.from(data)).toString())).toString("base64")).then((module)=>{
+                                const fileName = urlContainsSource(url)?url.replace(urlContainsSource(url)[0], ""):url;
+                                const {source} = resolveSource(fileName);
+                                source.files.find((file)=>file.fileName==fileName).module=module;
+                                console.log("from http", source.files.find((file)=>file.fileName==fileName).module)
+                                resolve(module);
+                            }, rej)
                         })
                     }else{
-                        rej(res.statusCode)
+                        if(res.statusCode==555){
+                            const src = urlContainsSource(reqinfo.requesturl)[0];
+                            init(src).then(({key, bobpub})=>{
+                                const source = sources.find((source)=>source.src==src);
+                                source.key = key;
+                                source.bobpub = bobpub;
+                                importhttp(url, authorization).then(resolve, rej)
+                            })
+                        }else{
+                            rej(res.statusCode)
+                        }
                     }
-                }
-            }).end()           
+                }).end()           
+        }
+        
     }, rej)    
 })
 const resolveImports = (script)=>{
