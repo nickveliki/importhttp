@@ -1,6 +1,6 @@
 {
   "name": "importhttp",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "scope out nickveliki/importhttp-server hosted files and import them into your project",
   "main": "index.js",
   "scripts": {
