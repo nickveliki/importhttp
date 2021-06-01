@@ -78,10 +78,8 @@ const sourceContent = (src)=>new Promise((resolve, rej)=>{
             res.on("end", ()=>{
                 const files = JSON.parse(Buffer.from(data).toString())
                 addFile(src+files.shift()).then(({requesturl})=>{
-                    //console.log(requesturl)
                     files.forEach((file)=>{
                         addFile(src+file).then(({requesturl})=>{
-                            //console.log(requesturl)
                         })
                     })
                     resolve()
@@ -95,7 +93,6 @@ const sourceContent = (src)=>new Promise((resolve, rej)=>{
 const importhttp = (url, authorization="vtoken noauth")=>new Promise((resolve, rej)=>{
     addFile(url).then((reqinfo)=>{
         if(reqinfo.module){
-            console.log("from requinfo", reqinfo.module)
             resolve(reqinfo.module);
         }else{
             http.request(reqinfo.requesturl, {method:"GET", headers:{authorization, bobpub:reqinfo.bobpub.toString("base64")}}, (res)=>{
@@ -110,7 +107,6 @@ const importhttp = (url, authorization="vtoken noauth")=>new Promise((resolve, r
                                 const fileName = urlContainsSource(url)?url.replace(urlContainsSource(url)[0], ""):url;
                                 const {source} = resolveSource(fileName);
                                 source.files.find((file)=>file.fileName==fileName).module=module;
-                                console.log("from http", source.files.find((file)=>file.fileName==fileName).module)
                                 resolve(module);
                             }, rej)
                         })
