@@ -66,7 +66,7 @@ const resolveSource = (file)=>{
     return {source, module};
 }
 const urlContainsSource = (url)=>{
-    return typeof(url)=="string"?url.match(/^http:\/\/[\w_-]*(:\d*)?\//):undefined
+    return typeof(url)=="string"?url.match(/^http:\/\/[\.\w_-]*(:\d*)?\//):undefined
 }
 const sourceContent = (src)=>new Promise((resolve, rej)=>{
     http.get(src, (res)=>{
